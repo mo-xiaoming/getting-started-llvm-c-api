@@ -1,0 +1,6 @@
+.cache/
+build*/
+compile_commands.json
+tags
+.vscode/
+vcpkg_installed/

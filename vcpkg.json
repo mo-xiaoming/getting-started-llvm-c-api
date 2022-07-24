@@ -1,0 +1,8 @@
+{
+  "name": "cpp-vcpkg-template",
+  "version-semver": "0.1.0",
+  "description": "cpp vcpkg template",
+  "dependencies": [
+    "gtest"
+  ]
+}

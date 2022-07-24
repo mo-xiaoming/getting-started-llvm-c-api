@@ -1,0 +1,4 @@
+BasedOnStyle: LLVM
+QualifierAlignment: Right
+PointerAlignment: Left
+ColumnLimit: 120
