@@ -1,10 +1,12 @@
 #ifndef LIB_H__
 #define LIB_H__
 
-#include <string>
+#include <cstdint>
 
 namespace lib {
-std::string foo(std::string const& s);
-}
+using native_int_t = std::int64_t;
+
+native_int_t sum(char const* a, char const* b);
+} // namespace lib
 
 #endif

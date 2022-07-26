@@ -2,4 +2,4 @@
 
 #include <gtest/gtest.h>
 
-TEST(LibSuite, Foo) { ASSERT_EQ(lib::foo("hello"), std::string("hello")); }
+TEST(LibSuite, Foo) { ASSERT_EQ(lib::sum("3", "39"), 42); }

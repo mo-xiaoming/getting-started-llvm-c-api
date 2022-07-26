@@ -1,8 +1,14 @@
 {
-  "name": "cpp-vcpkg-template",
+  "name": "pl0-jit",
   "version-semver": "0.1.0",
-  "description": "cpp vcpkg template",
+  "description": "pl0 jit compiler",
   "dependencies": [
-    "gtest"
+    "gtest",
+    {
+      "name": "llvm",
+      "default-features": false,
+      "features": ["target-x86", "enable-assertions", "tools"],
+      "platform": "x64"
+    }
   ]
 }
