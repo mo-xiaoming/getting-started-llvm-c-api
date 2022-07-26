@@ -1,9 +1,8 @@
 {
-  "name": "pl0-jit",
+  "name": "getting-started-llvm-c-api",
   "version-semver": "0.1.0",
-  "description": "pl0 jit compiler",
+  "description": "getting started with llvm c api",
   "dependencies": [
-    "gtest",
     {
       "name": "llvm",
       "default-features": false,

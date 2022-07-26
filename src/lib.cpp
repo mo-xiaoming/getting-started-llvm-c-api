@@ -53,11 +53,9 @@ auto exec_sum_fn(uint64_t addr, char const* a, char const* b) {
   native_int_t y = to_int(b);
   return func(x, y);
 }
-} // namespace
 
-namespace lib {
-static constexpr auto Fn_Opt_Cnt = 1;
-static constexpr auto Module_Opt_Cnt = 1;
+constexpr auto Fn_Opt_Cnt = 1;
+constexpr auto Module_Opt_Cnt = 1;
 
 struct fn_pass_manager_t {
   explicit fn_pass_manager_t(LLVMModuleRef mod) : m_fpm{LLVMCreateFunctionPassManagerForModule(mod)} {
@@ -140,7 +138,9 @@ void verify_module(LLVMModuleRef mod) {
   LLVMVerifyModule(mod, LLVMAbortProcessAction, &error);
   LLVMDisposeMessage(error);
 }
+} // namespace
 
+namespace lib {
 native_int_t sum(char const* a, char const* b) {
   LLVMModuleRef mod = LLVMModuleCreateWithName("jit-mod");
 
