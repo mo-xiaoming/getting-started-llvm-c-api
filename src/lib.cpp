@@ -15,11 +15,16 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 
 namespace {
 auto to_int(char const* s) { return std::strtoll(s, nullptr, 10); }
 
 using native_int_t = std::int64_t;
+
+auto make_builder() {
+  return std::shared_ptr<std::remove_pointer_t<LLVMBuilderRef>>{LLVMCreateBuilder(), LLVMDisposeBuilder};
+}
 
 LLVMValueRef create_factorial_fn(LLVMModuleRef mod) {
   LLVMTypeRef llvm_int_ty = LLVMInt64Type();
@@ -31,29 +36,30 @@ LLVMValueRef create_factorial_fn(LLVMModuleRef mod) {
   LLVMBasicBlockRef bb_ret = LLVMAppendBasicBlock(fn, "return");
   LLVMBasicBlockRef bb_tail = LLVMAppendBasicBlock(fn, "tail");
 
-  LLVMBuilderRef builder = LLVMCreateBuilder();
-  // if (n == 0)
-  LLVMPositionBuilderAtEnd(builder, bb_entry);
-  LLVMValueRef n = LLVMGetFirstParam(fn);
-  LLVMSetValueName(n, "n");
-  LLVMValueRef cond =
-      LLVMBuildICmp(builder, LLVMIntPredicate::LLVMIntEQ, LLVMConstInt(llvm_int_ty, 0U, /*SignedExtend*/ 0), n, "cond");
-  LLVMBuildCondBr(builder, cond, bb_ret, bb_tail);
+  {
+    auto const builder = make_builder();
+    // if (n == 0)
+    LLVMPositionBuilderAtEnd(builder.get(), bb_entry);
+    LLVMValueRef n = LLVMGetFirstParam(fn);
+    LLVMSetValueName(n, "n");
+    LLVMValueRef cond = LLVMBuildICmp(builder.get(), LLVMIntPredicate::LLVMIntEQ,
+                                      LLVMConstInt(llvm_int_ty, 0UL, /*SignedExtend*/ 0), n, "cond");
+    LLVMBuildCondBr(builder.get(), cond, bb_ret, bb_tail);
 
-  // then
-  // !0 == 1
-  LLVMPositionBuilderAtEnd(builder, bb_ret);
-  LLVMBuildRet(builder, LLVMConstInt(llvm_int_ty, 0U, /*SignExtend*/ 0));
+    // then
+    // !0 == 1
+    LLVMPositionBuilderAtEnd(builder.get(), bb_ret);
+    LLVMBuildRet(builder.get(), LLVMConstInt(llvm_int_ty, 1UL, /*SignExtend*/ 0));
 
-  // else
-  // n * factorial(n-1)
-  LLVMPositionBuilderAtEnd(builder, bb_tail);
-  LLVMValueRef n1 = LLVMBuildSub(builder, n, LLVMConstInt(llvm_int_ty, 1UL, /*SignedExtend*/ 0), "n1");
-  LLVMValueRef f1 = LLVMBuildCall2(builder, proto_ty, fn, &n1, 1, "f1");
-  LLVMSetTailCall(f1, /*IsTailCall*/ 1); // Doesn't seem to make any difference
-  LLVMValueRef ret = LLVMBuildMul(builder, n, f1, "ret");
-  LLVMBuildRet(builder, ret);
-  LLVMDisposeBuilder(builder);
+    // else
+    // n * factorial(n-1)
+    LLVMPositionBuilderAtEnd(builder.get(), bb_tail);
+    LLVMValueRef n1 = LLVMBuildSub(builder.get(), n, LLVMConstInt(llvm_int_ty, 1UL, /*SignedExtend*/ 0), "n1");
+    LLVMValueRef f1 = LLVMBuildCall2(builder.get(), proto_ty, fn, &n1, 1U, "f1");
+    LLVMSetTailCall(f1, /*IsTailCall*/ 1); // Doesn't seem to make any difference
+    LLVMValueRef ret = LLVMBuildMul(builder.get(), n, f1, "ret");
+    LLVMBuildRet(builder.get(), ret);
+  }
 
   LLVMVerifyFunction(fn, LLVMAbortProcessAction);
   return fn;
@@ -78,15 +84,16 @@ LLVMValueRef create_sum_fn(LLVMModuleRef mod) {
 
   LLVMBasicBlockRef entry = LLVMAppendBasicBlock(sum_fn, "entry");
 
-  LLVMBuilderRef builder = LLVMCreateBuilder();
-  LLVMPositionBuilderAtEnd(builder, entry);
-  LLVMValueRef a = LLVMGetParam(sum_fn, 0);
-  LLVMSetValueName(a, "a");
-  LLVMValueRef b = LLVMGetParam(sum_fn, 1);
-  LLVMSetValueName(b, "b");
-  LLVMValueRef add_tmp = LLVMBuildAdd(builder, a, b, "add_tmp");
-  LLVMBuildRet(builder, add_tmp);
-  LLVMDisposeBuilder(builder);
+  {
+    auto const builder = make_builder();
+    LLVMPositionBuilderAtEnd(builder.get(), entry);
+    LLVMValueRef a = LLVMGetParam(sum_fn, 0);
+    LLVMSetValueName(a, "a");
+    LLVMValueRef b = LLVMGetParam(sum_fn, 1);
+    LLVMSetValueName(b, "b");
+    LLVMValueRef add_tmp = LLVMBuildAdd(builder.get(), a, b, "add_tmp");
+    LLVMBuildRet(builder.get(), add_tmp);
+  }
 
   LLVMVerifyFunction(sum_fn, LLVMAbortProcessAction);
   return sum_fn;
@@ -125,13 +132,14 @@ LLVMValueRef create_out_fn(LLVMModuleRef mod) {
   LLVMValueRef out_fn = LLVMAddFunction(mod, "out", puts_proto_ty);
   LLVMBasicBlockRef entry = LLVMAppendBasicBlock(out_fn, "entry");
 
-  LLVMBuilderRef builder = LLVMCreateBuilder();
-  LLVMPositionBuilderAtEnd(builder, entry);
-  LLVMValueRef str = LLVMGetFirstParam(out_fn);
-  LLVMSetValueName(str, "str");
-  LLVMValueRef cnt = LLVMBuildCall2(builder, puts_proto_ty, puts_fn, &str, 1, "ch_cnt");
-  LLVMBuildRet(builder, cnt);
-  LLVMDisposeBuilder(builder);
+  {
+    auto const builder = make_builder();
+    LLVMPositionBuilderAtEnd(builder.get(), entry);
+    LLVMValueRef str = LLVMGetFirstParam(out_fn);
+    LLVMSetValueName(str, "str");
+    LLVMValueRef cnt = LLVMBuildCall2(builder.get(), puts_proto_ty, puts_fn, &str, 1, "ch_cnt");
+    LLVMBuildRet(builder.get(), cnt);
+  }
 
   LLVMVerifyFunction(out_fn, LLVMAbortProcessAction);
 
@@ -260,6 +268,6 @@ void all() {
   exec_out_fn(out_addr, "hello, out");
 
   auto fact_addr = jit.fn_addr(fact_name);
-  std::cout << exec_factorial_fn(fact_addr, 0) << std::endl;
+  std::cout << exec_factorial_fn(fact_addr, 4) << std::endl;
 }
 } // namespace lib
