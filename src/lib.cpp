@@ -238,7 +238,7 @@ private:
   LLVMPassManagerRef m_fpm;
 };
 
-void opt_on_module(LLVMModuleRef mod) {
+void optimize_module(LLVMModuleRef mod) {
   auto* mpm = LLVMCreatePassManager();
   LLVMAddFunctionInliningPass(mpm);
   LLVMAddMergeFunctionsPass(mpm);
@@ -260,10 +260,10 @@ struct jit_t {
     LLVMInitializeNativeTarget();
     LLVMInitializeNativeAsmPrinter();
 
-    opt_on_module(m_module);
+    optimize_module(m_module);
 
     char* error = nullptr;
-    if (LLVMCreateExecutionEngineForModule(&m_engine, m_module, &error) != 0) {
+    if (LLVMCreateExecutionEngineForModule(&m_jit_engine, m_module, &error) != 0) {
       std::cerr << "failed to create execution engine, " << error << '\n';
       LLVMDisposeMessage(error);
       assert(false); // NOLINT
@@ -273,13 +273,13 @@ struct jit_t {
   jit_t(jit_t&&) = delete;
   jit_t& operator=(jit_t const&) = delete;
   jit_t& operator=(jit_t&&) = delete;
-  ~jit_t() { LLVMDisposeExecutionEngine(m_engine); }
+  ~jit_t() { LLVMDisposeExecutionEngine(m_jit_engine); }
 
-  uint64_t fn_addr(char const* name) { return LLVMGetFunctionAddress(m_engine, name); }
+  uint64_t fn_addr(char const* name) { return LLVMGetFunctionAddress(m_jit_engine, name); }
 
 private:
   LLVMModuleRef m_module;
-  LLVMExecutionEngineRef m_engine = nullptr;
+  LLVMExecutionEngineRef m_jit_engine = nullptr;
 };
 
 void verify_module(LLVMModuleRef mod) {
