@@ -5,6 +5,7 @@ Started from Pauladam Smith's blog [how to get started with llvm c api](https://
 1. Adopted Paladam's `sum` code to LLVM 14 and C++
 2. Call functions from libc, `puts`
 3. Recursive function `factorial(n)` with `LLVMAddTailCallEliminationPass` to elimate recursive calls in IR
+4. Naive recursive implementation of `fib(n)`, clearly only the last `fib` call in `fib(n-1) + fib(n-2)` got TCE optimized
 
 ## Build
 

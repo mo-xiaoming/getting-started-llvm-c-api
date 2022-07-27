@@ -26,6 +26,56 @@ auto make_builder() {
   return std::shared_ptr<std::remove_pointer_t<LLVMBuilderRef>>{LLVMCreateBuilder(), LLVMDisposeBuilder};
 }
 
+LLVMValueRef create_fib_fn(LLVMModuleRef mod) {
+  LLVMTypeRef llvm_int_ty = LLVMInt64Type();
+
+  LLVMTypeRef proto_ty = LLVMFunctionType(llvm_int_ty, &llvm_int_ty, 1U, /*isVarArg*/ 0);
+  LLVMValueRef fn = LLVMAddFunction(mod, "fib", proto_ty);
+
+  LLVMBasicBlockRef bb_entry = LLVMAppendBasicBlock(fn, "entry");
+  LLVMBasicBlockRef bb_ret = LLVMAppendBasicBlock(fn, "return");
+  LLVMBasicBlockRef bb_tail = LLVMAppendBasicBlock(fn, "tail");
+
+  {
+    auto const builder = make_builder();
+    // if (n == 0 || n == 1)
+    LLVMPositionBuilderAtEnd(builder.get(), bb_entry);
+    LLVMValueRef n = LLVMGetFirstParam(fn);
+    LLVMSetValueName(n, "n");
+    LLVMValueRef cond0 = LLVMBuildICmp(builder.get(), LLVMIntPredicate::LLVMIntEQ,
+                                       LLVMConstInt(llvm_int_ty, 0ULL, /*SignedExtend*/ 0), n, "eq0");
+    LLVMValueRef cond1 = LLVMBuildICmp(builder.get(), LLVMIntPredicate::LLVMIntEQ,
+                                       LLVMConstInt(llvm_int_ty, 1ULL, /*SignedExtend*/ 0), n, "eq1");
+    LLVMValueRef cond = LLVMBuildOr(builder.get(), cond0, cond1, "cond");
+    LLVMBuildCondBr(builder.get(), cond, bb_ret, bb_tail);
+
+    // then
+    // fib(n) == n
+    LLVMPositionBuilderAtEnd(builder.get(), bb_ret);
+    LLVMBuildRet(builder.get(), n);
+
+    // else
+    // fib(n-1) + fib(n-2)
+    LLVMPositionBuilderAtEnd(builder.get(), bb_tail);
+    LLVMValueRef n1 = LLVMBuildSub(builder.get(), n, LLVMConstInt(llvm_int_ty, 1ULL, /*SignedExtend*/ 0), "n1");
+    LLVMValueRef f1 = LLVMBuildCall2(builder.get(), proto_ty, fn, &n1, 1U, "f1");
+    LLVMSetTailCall(f1, /*IsTailCall*/ 1); // Doesn't seem to make any difference
+    LLVMValueRef n2 = LLVMBuildSub(builder.get(), n, LLVMConstInt(llvm_int_ty, 2ULL, /*SignedExtend*/ 0), "n2");
+    LLVMValueRef f2 = LLVMBuildCall2(builder.get(), proto_ty, fn, &n2, 1U, "f2");
+    LLVMSetTailCall(f2, /*IsTailCall*/ 1); // Doesn't seem to make any difference
+    LLVMValueRef ret = LLVMBuildAdd(builder.get(), f1, f2, "ret");
+    LLVMBuildRet(builder.get(), ret);
+  }
+
+  LLVMVerifyFunction(fn, LLVMAbortProcessAction);
+  return fn;
+}
+
+native_int_t exec_fib_fn(uint64_t addr, native_int_t n) {             // NOLINT
+  auto func = reinterpret_cast<native_int_t (*)(native_int_t)>(addr); // NOLINT
+  return func(n);
+}
+
 LLVMValueRef create_factorial_fn(LLVMModuleRef mod) {
   LLVMTypeRef llvm_int_ty = LLVMInt64Type();
 
@@ -43,18 +93,18 @@ LLVMValueRef create_factorial_fn(LLVMModuleRef mod) {
     LLVMValueRef n = LLVMGetFirstParam(fn);
     LLVMSetValueName(n, "n");
     LLVMValueRef cond = LLVMBuildICmp(builder.get(), LLVMIntPredicate::LLVMIntEQ,
-                                      LLVMConstInt(llvm_int_ty, 0UL, /*SignedExtend*/ 0), n, "cond");
+                                      LLVMConstInt(llvm_int_ty, 0ULL, /*SignedExtend*/ 0), n, "cond");
     LLVMBuildCondBr(builder.get(), cond, bb_ret, bb_tail);
 
     // then
     // !0 == 1
     LLVMPositionBuilderAtEnd(builder.get(), bb_ret);
-    LLVMBuildRet(builder.get(), LLVMConstInt(llvm_int_ty, 1UL, /*SignExtend*/ 0));
+    LLVMBuildRet(builder.get(), LLVMConstInt(llvm_int_ty, 1ULL, /*SignExtend*/ 0));
 
     // else
     // n * factorial(n-1)
     LLVMPositionBuilderAtEnd(builder.get(), bb_tail);
-    LLVMValueRef n1 = LLVMBuildSub(builder.get(), n, LLVMConstInt(llvm_int_ty, 1UL, /*SignedExtend*/ 0), "n1");
+    LLVMValueRef n1 = LLVMBuildSub(builder.get(), n, LLVMConstInt(llvm_int_ty, 1ULL, /*SignedExtend*/ 0), "n1");
     LLVMValueRef f1 = LLVMBuildCall2(builder.get(), proto_ty, fn, &n1, 1U, "f1");
     LLVMSetTailCall(f1, /*IsTailCall*/ 1); // Doesn't seem to make any difference
     LLVMValueRef ret = LLVMBuildMul(builder.get(), n, f1, "ret");
@@ -257,17 +307,26 @@ void all() {
   auto* const fact_fn = create_factorial_fn(mod);
   fpm(fact_fn, fact_name);
 
+  char const* fib_name = "fib";
+  auto* const fib_fn = create_fib_fn(mod);
+  fpm(fib_fn, fib_name);
+
   verify_module(mod);
 
   jit_t jit{mod};
 
+  std::cerr << "----------------------------------------------------\n";
+
   auto sum_addr = jit.fn_addr(sum_name);
-  std::cout << exec_sum_fn(sum_addr, "29", "14") << std::endl;
+  assert(exec_sum_fn(sum_addr, "29", "13") == 42LL); // NOLINT
 
   auto out_addr = jit.fn_addr(out_name);
   exec_out_fn(out_addr, "hello, out");
 
   auto fact_addr = jit.fn_addr(fact_name);
-  std::cout << exec_factorial_fn(fact_addr, 4) << std::endl;
+  assert(exec_factorial_fn(fact_addr, 4) == 24LL); // NOLINT
+
+  auto fib_addr = jit.fn_addr(fib_name);
+  assert(exec_fib_fn(fib_addr, 14) == 377LL); // NOLINT
 }
 } // namespace lib
