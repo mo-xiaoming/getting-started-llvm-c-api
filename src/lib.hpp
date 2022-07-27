@@ -4,9 +4,7 @@
 #include <cstdint>
 
 namespace lib {
-using native_int_t = std::int64_t;
-
-native_int_t sum(char const* a, char const* b);
+void all();
 } // namespace lib
 
 #endif
