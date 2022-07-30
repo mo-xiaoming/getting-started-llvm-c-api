@@ -28,6 +28,13 @@ auto make_builder() {
 
 bool has_function_defined(LLVMValueRef fn) { return LLVMCountBasicBlocks(fn) == 0; }
 
+/**
+ * int64 fib(int64 n) {
+ *   if (n == 0) return 0;
+ *   if (n == 1) return 1;
+ *   return fib(n-1) + fib(n-2);
+ * }
+ */
 LLVMValueRef create_fib_fn(LLVMModuleRef mod) {
   LLVMTypeRef llvm_int_ty = LLVMInt64Type();
 
@@ -78,6 +85,12 @@ native_int_t exec_fib_fn(uint64_t addr, native_int_t n) {             // NOLINT
   return func(n);
 }
 
+/**
+ * int64 factorial(int64 n) {
+ *   if (n == 0) return 1;
+ *   return n * factorial(n-1);
+ * }
+ */
 LLVMValueRef create_factorial_fn(LLVMModuleRef mod) {
   LLVMTypeRef llvm_int_ty = LLVMInt64Type();
 
@@ -118,6 +131,71 @@ LLVMValueRef create_factorial_fn(LLVMModuleRef mod) {
 }
 
 native_int_t exec_factorial_fn(uint64_t addr, native_int_t n) {       // NOLINT
+  auto func = reinterpret_cast<native_int_t (*)(native_int_t)>(addr); // NOLINT
+  return func(n);
+}
+
+/**
+ * int64 factorial_loop(int64 n) {
+ *   int64 ret = 1;
+ *   while (n > 0) {
+ *     ret *= n;
+ *     --n;
+ *   }
+ *   return ret;
+ * }
+ */
+LLVMValueRef create_factorial_loop_fn(LLVMModuleRef mod) {
+  LLVMTypeRef llvm_int_ty = LLVMInt64Type();
+
+  LLVMTypeRef proto_ty = LLVMFunctionType(llvm_int_ty, &llvm_int_ty, 1U, /*isVarArg*/ 0);
+  LLVMValueRef fn = LLVMAddFunction(mod, "factorial_loop", proto_ty);
+
+  LLVMBasicBlockRef bb_entry = LLVMAppendBasicBlock(fn, "entry");
+  LLVMBasicBlockRef bb_loop = LLVMAppendBasicBlock(fn, "loop");
+  LLVMBasicBlockRef bb_body = LLVMAppendBasicBlock(fn, "loop_body");
+  LLVMBasicBlockRef bb_ret = LLVMAppendBasicBlock(fn, "return");
+
+  {
+    auto const builder = make_builder();
+
+    LLVMPositionBuilderAtEnd(builder.get(), bb_entry);
+    // ret = 1
+    LLVMValueRef ret = LLVMBuildAlloca(builder.get(), llvm_int_ty, "ret");
+    LLVMBuildStore(builder.get(), LLVMConstInt(llvm_int_ty, 1ULL, /*SignExtend*/ 0), ret);
+    LLVMValueRef n = LLVMBuildAlloca(builder.get(), llvm_int_ty, "n");
+    LLVMBuildStore(builder.get(), LLVMGetFirstParam(fn), n);
+    LLVMBuildBr(builder.get(), bb_loop);
+
+    // while (n > 0) do {
+    LLVMPositionBuilderAtEnd(builder.get(), bb_loop);
+    LLVMValueRef cond = LLVMBuildICmp(builder.get(), LLVMIntPredicate::LLVMIntSGT,
+                                      LLVMBuildLoad2(builder.get(), llvm_int_ty, n, "n_loaded"),
+                                      LLVMConstInt(llvm_int_ty, 0ULL, /*SignExtend*/ 0), "cond");
+    LLVMBuildCondBr(builder.get(), cond, bb_body, bb_ret);
+
+    // ret *= n
+    LLVMPositionBuilderAtEnd(builder.get(), bb_body);
+    LLVMValueRef tmp = LLVMBuildMul(builder.get(), LLVMBuildLoad2(builder.get(), llvm_int_ty, ret, "ret_loaded"),
+                                    LLVMBuildLoad2(builder.get(), llvm_int_ty, n, "n_loaded"), "tmp_mul");
+    LLVMBuildStore(builder.get(), tmp, ret);
+
+    // n = n-1
+    LLVMValueRef n1 = LLVMBuildSub(builder.get(), LLVMBuildLoad2(builder.get(), llvm_int_ty, n, "n_loaded"),
+                                   LLVMConstInt(llvm_int_ty, 1ULL, /*SignExtend*/ 0), "dec_n");
+    LLVMBuildStore(builder.get(), n1, n);
+    LLVMBuildBr(builder.get(), bb_loop);
+
+    // }
+    LLVMPositionBuilderAtEnd(builder.get(), bb_ret);
+    LLVMBuildRet(builder.get(), LLVMBuildLoad2(builder.get(), llvm_int_ty, ret, "result"));
+  }
+
+  LLVMVerifyFunction(fn, LLVMAbortProcessAction);
+  return fn;
+}
+
+native_int_t exec_factorial_loop_fn(uint64_t addr, native_int_t n) {  // NOLINT
   auto func = reinterpret_cast<native_int_t (*)(native_int_t)>(addr); // NOLINT
   return func(n);
 }
@@ -213,8 +291,6 @@ LLVMValueRef create_is_odd_fn(LLVMModuleRef mod) {
     LLVMValueRef phi = LLVMBuildPhi(builder.get(), LLVMGetReturnType(out_proto_ty), "merge");
     LLVMAddIncoming(phi, &ret_then, &bb_then, 1);
     LLVMAddIncoming(phi, &ret_else, &bb_else, 1);
-
-    // return
     LLVMBuildRetVoid(builder.get());
   }
 
@@ -377,6 +453,10 @@ void all() {
   auto* const fact_fn = create_factorial_fn(mod);
   fpm(fact_fn, fact_name);
 
+  char const* fact_loop_name = "factorial_loop";
+  auto* const fact_loop_fn = create_factorial_loop_fn(mod);
+  fpm(fact_loop_fn, fact_loop_name);
+
   char const* fib_name = "fib";
   auto* const fib_fn = create_fib_fn(mod);
   fpm(fib_fn, fib_name);
@@ -399,6 +479,9 @@ void all() {
 
   auto fact_addr = jit.fn_addr(fact_name);
   assert(exec_factorial_fn(fact_addr, 4) == 24LL); // NOLINT
+
+  auto fact_loop_addr = jit.fn_addr(fact_loop_name);
+  assert(exec_factorial_loop_fn(fact_loop_addr, 4) == 24LL); // NOLINT
 
   auto fib_addr = jit.fn_addr(fib_name);
   assert(exec_fib_fn(fib_addr, 14) == 377LL); // NOLINT
