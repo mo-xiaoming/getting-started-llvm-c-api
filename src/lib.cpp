@@ -26,6 +26,8 @@ auto make_builder() {
   return std::shared_ptr<std::remove_pointer_t<LLVMBuilderRef>>{LLVMCreateBuilder(), LLVMDisposeBuilder};
 }
 
+bool has_function_defined(LLVMValueRef fn) { return LLVMCountBasicBlocks(fn) == 0; }
+
 LLVMValueRef create_fib_fn(LLVMModuleRef mod) {
   LLVMTypeRef llvm_int_ty = LLVMInt64Type();
 
@@ -156,6 +158,74 @@ auto exec_sum_fn(uint64_t addr, char const* a, char const* b) {
   return func(x, y);
 }
 
+/**
+ * void is_odd(int a) {
+ *   if (a % 2 == 1) {
+ *     puts("is odd");
+ *   } else {
+ *     puts("is even");
+ *   }
+ * }
+ */
+LLVMValueRef create_is_odd_fn(LLVMModuleRef mod) {
+  LLVMTypeRef llvm_int_ty = LLVMInt32Type();
+
+  LLVMValueRef fn = LLVMAddFunction(mod, "is_odd", LLVMFunctionType(LLVMVoidType(), &llvm_int_ty, 1U, /*IsVarArg*/ 0));
+
+  LLVMBasicBlockRef entry = LLVMAppendBasicBlock(fn, "entry");
+
+  LLVMBasicBlockRef bb_then = LLVMAppendBasicBlock(fn, "then");
+  LLVMBasicBlockRef bb_else = LLVMAppendBasicBlock(fn, "else");
+  LLVMBasicBlockRef bb_merge = LLVMAppendBasicBlock(fn, "merge");
+
+  LLVMValueRef out_fn = LLVMGetNamedFunction(mod, "out");
+  LLVMTypeRef char_ptr_ty = LLVMPointerType(LLVMInt8Type(), /*AddressSpace*/ 0);
+  LLVMTypeRef out_proto_ty = LLVMFunctionType(LLVMInt32Type(), &char_ptr_ty, 1U, /*isVarArg*/ 0);
+
+  {
+    auto const builder = make_builder();
+
+    LLVMPositionBuilderAtEnd(builder.get(), entry);
+
+    LLVMValueRef is_odd_str = LLVMBuildGlobalStringPtr(builder.get(), "is odd", "is_odd_str");
+    LLVMValueRef is_even_str = LLVMBuildGlobalStringPtr(builder.get(), "is even", "is_even_str");
+
+    // a % 2
+    LLVMValueRef rem =
+        LLVMBuildURem(builder.get(), LLVMGetFirstParam(fn), LLVMConstInt(llvm_int_ty, 2ULL, /*SignExtend*/ 0), "rem");
+    // a % 2 == 1
+    LLVMValueRef cond = LLVMBuildICmp(builder.get(), LLVMIntPredicate::LLVMIntEQ, rem,
+                                      LLVMConstInt(llvm_int_ty, 1ULL, /*SignExtend*/ 0), "cond");
+    LLVMBuildCondBr(builder.get(), cond, bb_then, bb_else);
+
+    // then
+    LLVMPositionBuilderAtEnd(builder.get(), bb_then);
+    LLVMValueRef ret_then = LLVMBuildCall2(builder.get(), out_proto_ty, out_fn, &is_odd_str, 1U, "out_odd");
+    LLVMBuildBr(builder.get(), bb_merge);
+
+    // else
+    LLVMPositionBuilderAtEnd(builder.get(), bb_else);
+    LLVMValueRef ret_else = LLVMBuildCall2(builder.get(), out_proto_ty, out_fn, &is_even_str, 1U, "out_even");
+    LLVMBuildBr(builder.get(), bb_merge);
+
+    // merge
+    LLVMPositionBuilderAtEnd(builder.get(), bb_merge);
+    LLVMValueRef phi = LLVMBuildPhi(builder.get(), LLVMGetReturnType(out_proto_ty), "merge");
+    LLVMAddIncoming(phi, &ret_then, &bb_then, 1);
+    LLVMAddIncoming(phi, &ret_else, &bb_else, 1);
+
+    // return
+    LLVMBuildRetVoid(builder.get());
+  }
+
+  return fn;
+}
+
+void exec_is_odd_fn(uint64_t addr, int a) {          // NOLINT
+  auto func = reinterpret_cast<void (*)(int)>(addr); // NOLINT
+  func(a);
+}
+
 struct extern_fn_t {
   LLVMTypeRef proto_ty;
   LLVMValueRef fn;
@@ -166,10 +236,10 @@ struct extern_fn_t {
  */
 extern_fn_t declare_puts_fn(LLVMModuleRef mod) {
   LLVMTypeRef char_ptr_ty = LLVMPointerType(LLVMInt8Type(), /*AddressSpace*/ 0);
-  auto param_types = std::array{char_ptr_ty};
-  LLVMTypeRef proto_ty = LLVMFunctionType(LLVMInt32Type(), param_types.data(), 1U, /*isVarArg*/ 0);
+  LLVMTypeRef proto_ty = LLVMFunctionType(LLVMInt32Type(), &char_ptr_ty, 1U, /*isVarArg*/ 0);
   LLVMValueRef puts_fn = LLVMAddFunction(mod, "puts", proto_ty);
 
+  assert(has_function_defined(puts_fn)); // NOLINT
   return {.proto_ty = proto_ty, .fn = puts_fn};
 }
 
@@ -187,7 +257,7 @@ LLVMValueRef create_out_fn(LLVMModuleRef mod) {
     LLVMPositionBuilderAtEnd(builder.get(), entry);
     LLVMValueRef str = LLVMGetFirstParam(out_fn);
     LLVMSetValueName(str, "str");
-    LLVMValueRef cnt = LLVMBuildCall2(builder.get(), puts_proto_ty, puts_fn, &str, 1, "ch_cnt");
+    LLVMValueRef cnt = LLVMBuildCall2(builder.get(), puts_proto_ty, puts_fn, &str, 1U, "ch_cnt");
     LLVMBuildRet(builder.get(), cnt);
   }
 
@@ -311,6 +381,10 @@ void all() {
   auto* const fib_fn = create_fib_fn(mod);
   fpm(fib_fn, fib_name);
 
+  char const* is_odd_name = "is_odd";
+  auto* const is_odd_fn = create_is_odd_fn(mod);
+  fpm(is_odd_fn, is_odd_name);
+
   verify_module(mod);
 
   jit_t jit{mod};
@@ -328,5 +402,9 @@ void all() {
 
   auto fib_addr = jit.fn_addr(fib_name);
   assert(exec_fib_fn(fib_addr, 14) == 377LL); // NOLINT
+
+  auto is_odd_addr = jit.fn_addr(is_odd_name);
+  exec_is_odd_fn(is_odd_addr, 5);
+  exec_is_odd_fn(is_odd_addr, 4);
 }
 } // namespace lib
