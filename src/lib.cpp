@@ -29,6 +29,113 @@ auto make_builder() {
 bool has_function_defined(LLVMValueRef fn) { return LLVMCountBasicBlocks(fn) == 0; }
 
 /**
+ * int64 arithmetic_progression_sum(int64 arg0) {
+ *   int64 memory[arg0];
+ *   for (int n=0; n < arg0; ++n) {
+ *     memory[n] = n + 1;
+ *   }
+ *   int64 sum = 0;
+ *   for (int n=0; n < arg0; ++n) {
+ *     sum += memory[n];
+ *   }
+ *   return sum;
+ * }
+ */
+LLVMValueRef create_ap_sum_fn(LLVMModuleRef mod) {
+  LLVMTypeRef llvm_int_ty = LLVMInt64Type();
+
+  LLVMTypeRef proto_ty = LLVMFunctionType(llvm_int_ty, &llvm_int_ty, 1U, /*isVarArg*/ 0);
+  LLVMValueRef fn = LLVMAddFunction(mod, "ap_sum", proto_ty);
+
+  LLVMBasicBlockRef bb_entry = LLVMAppendBasicBlock(fn, "entry");
+  LLVMBasicBlockRef bb_cond = LLVMAppendBasicBlock(fn, "bb_cond");
+  LLVMBasicBlockRef bb_loop = LLVMAppendBasicBlock(fn, "loop");
+  LLVMBasicBlockRef bb_after_loop = LLVMAppendBasicBlock(fn, "after_loop");
+  LLVMBasicBlockRef bb_sum_cond = LLVMAppendBasicBlock(fn, "bb_sum_cond");
+  LLVMBasicBlockRef bb_sum_loop = LLVMAppendBasicBlock(fn, "sum_loop");
+  LLVMBasicBlockRef bb_after_sum_loop = LLVMAppendBasicBlock(fn, "after_sum_loop");
+
+  {
+    auto const builder = make_builder();
+
+    LLVMValueRef Zero = LLVMConstInt(llvm_int_ty, 0ULL, /*SignExtend*/ 0);
+    LLVMValueRef One = LLVMConstInt(llvm_int_ty, 1ULL, /*SignExtend*/ 0);
+
+    // initialize array
+    LLVMPositionBuilderAtEnd(builder.get(), bb_entry);
+
+    // sum = 0
+    LLVMValueRef sum_alloca = LLVMBuildAlloca(builder.get(), llvm_int_ty, "sum_alloca");
+    LLVMBuildStore(builder.get(), Zero, sum_alloca);
+
+    // n = 0
+    LLVMValueRef n_alloca = LLVMBuildAlloca(builder.get(), llvm_int_ty, "n_alloca");
+    LLVMBuildStore(builder.get(), Zero, n_alloca);
+
+    LLVMValueRef arg0 = LLVMGetFirstParam(fn);
+    LLVMSetValueName(arg0, "arg0");
+
+    // alloca int64[arg0]
+    LLVMValueRef array = LLVMBuildArrayAlloca(builder.get(), llvm_int_ty, arg0, "memory");
+    LLVMBuildBr(builder.get(), bb_cond);
+
+    LLVMPositionBuilderAtEnd(builder.get(), bb_cond);
+    // n != arg0
+    LLVMValueRef cond = LLVMBuildICmp(builder.get(), LLVMIntPredicate::LLVMIntNE, arg0,
+                                      LLVMBuildLoad2(builder.get(), llvm_int_ty, n_alloca, "n_loaded"), "cond");
+    LLVMBuildCondBr(builder.get(), cond, bb_loop, bb_after_loop);
+
+    // then
+    LLVMPositionBuilderAtEnd(builder.get(), bb_loop);
+    LLVMValueRef n_loaded = LLVMBuildLoad2(builder.get(), llvm_int_ty, n_alloca, "n_loaded");
+    // e = &array[n]
+    LLVMValueRef elem_addr = LLVMBuildInBoundsGEP2(builder.get(), llvm_int_ty, array, &n_loaded, 1, "elem_addr");
+    // *e = n + 1
+    LLVMBuildStore(builder.get(), LLVMBuildAdd(builder.get(), n_loaded, One, "n1"), elem_addr);
+    // n = n + 1
+    LLVMBuildStore(builder.get(), LLVMBuildAdd(builder.get(), n_loaded, One, "n1"), n_alloca);
+    LLVMBuildBr(builder.get(), bb_cond);
+
+    LLVMPositionBuilderAtEnd(builder.get(), bb_after_loop);
+    // n = 0
+    LLVMBuildStore(builder.get(), Zero, n_alloca);
+    LLVMBuildBr(builder.get(), bb_sum_cond);
+
+    // sum
+    LLVMPositionBuilderAtEnd(builder.get(), bb_sum_cond);
+    // n != arg0
+    cond = LLVMBuildICmp(builder.get(), LLVMIntPredicate::LLVMIntNE, arg0,
+                         LLVMBuildLoad2(builder.get(), llvm_int_ty, n_alloca, "n_loaded"), "cond");
+    LLVMBuildCondBr(builder.get(), cond, bb_sum_loop, bb_after_sum_loop);
+
+    // then
+    LLVMPositionBuilderAtEnd(builder.get(), bb_sum_loop);
+    n_loaded = LLVMBuildLoad2(builder.get(), llvm_int_ty, n_alloca, "n_loaded");
+    // e = &array[n]
+    elem_addr = LLVMBuildInBoundsGEP2(builder.get(), llvm_int_ty, array, &n_loaded, 1, "elem_addr");
+    LLVMValueRef elem = LLVMBuildLoad2(builder.get(), llvm_int_ty, elem_addr, "elem_loaded");
+    // sum += e
+    LLVMValueRef sum_loaded = LLVMBuildLoad2(builder.get(), llvm_int_ty, sum_alloca, "");
+    LLVMBuildStore(builder.get(), LLVMBuildAdd(builder.get(), sum_loaded, elem, "sum_and_e"), sum_alloca);
+    // n = n + 1
+    LLVMBuildStore(builder.get(), LLVMBuildAdd(builder.get(), n_loaded, One, "n_loaded"), n_alloca);
+    LLVMBuildBr(builder.get(), bb_sum_cond);
+
+    LLVMPositionBuilderAtEnd(builder.get(), bb_after_sum_loop);
+    LLVMBuildRet(builder.get(), LLVMBuildLoad2(builder.get(), llvm_int_ty, sum_alloca, "sum"));
+  }
+
+  LLVMDumpValue(fn);
+  LLVMVerifyFunction(fn, LLVMAbortProcessAction);
+  return fn;
+}
+
+native_int_t exec_ap_sum_fn(uint64_t addr, native_int_t n) {          // NOLINT
+  auto func = reinterpret_cast<native_int_t (*)(native_int_t)>(addr); // NOLINT
+  return func(n);
+}
+
+/**
  * int64 fib(int64 n) {
  *   if (n == 0) return 0;
  *   if (n == 1) return 1;
@@ -465,6 +572,10 @@ void all() {
   auto* const is_odd_fn = create_is_odd_fn(mod);
   fpm(is_odd_fn, is_odd_name);
 
+  char const* ap_sum_name = "ap_sum";
+  auto* const ap_sum_fn = create_ap_sum_fn(mod);
+  fpm(ap_sum_fn, ap_sum_name);
+
   verify_module(mod);
 
   jit_t jit{mod};
@@ -489,5 +600,8 @@ void all() {
   auto is_odd_addr = jit.fn_addr(is_odd_name);
   exec_is_odd_fn(is_odd_addr, 5);
   exec_is_odd_fn(is_odd_addr, 4);
+
+  auto ap_sum_addr = jit.fn_addr(ap_sum_name);
+  assert(exec_ap_sum_fn(ap_sum_addr, 30ULL) == (1 + 30) * 30 / 2); // NOLINT
 }
 } // namespace lib
