@@ -2,6 +2,12 @@
 
 Started from Pauladam Smith's blog [how to get started with llvm c api](https://www.pauladamsmith.com/blog/2015/01/how-to-get-started-with-llvm-c-api.html), then try to make it a comprehensive code guide about llvm c api
 
+## Build
+
+Typical cmake project, make sure LLVM in cmake search path
+
+## MCJIT
+
 1. **simple function** -- `create_sum_fn`: Adopted Paladam's `sum` code to LLVM 14 and C++
 2. **call function in libc** -- `create_out_fn`: Call functions from libc, `puts`
 3. **recursive calls and TCE** -- `create_factorial_fn`: Recursive function `factorial(n)` with `LLVMAddTailCallEliminationPass` to eliminate recursive calls in IR
@@ -11,7 +17,6 @@ Started from Pauladam Smith's blog [how to get started with llvm c api](https://
 7. **array access with GEP** -- `create_ap_sum_fn`: Sum of an array of arithmetic progression numbers, I really hoped LLVM can do it in the way of `(f + l) * n / 2`, but sadly no, still loops
 8. **Niubi LLVM optimization** -- `create_ap_simple_sum_fn`: Sum of ~an array of~ a sequence of arithmetic progression numbers, still not using that formula, maybe because of some optimization are missing, [unlike pure -O3](https://godbolt.org/z/Pcxs6P3Wz)
 
-## Build
+## ORC V2 JIT
 
-Typical cmake project, make sure LLVM in cmake search path
-
+In `orcv2jit.cpp` file
