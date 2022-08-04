@@ -537,6 +537,8 @@ struct fn_pass_manager_t {
     LLVMAddGVNPass(m_fpm);
     LLVMAddCFGSimplificationPass(m_fpm);
     LLVMAddTailCallEliminationPass(m_fpm);
+    LLVMAddLoopDeletionPass(m_fpm);
+    LLVMAddLoopIdiomPass(m_fpm);
     LLVMInitializeFunctionPassManager(m_fpm);
   }
   fn_pass_manager_t(fn_pass_manager_t const&) = delete;

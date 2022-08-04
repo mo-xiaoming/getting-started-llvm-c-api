@@ -7,4 +7,6 @@ namespace lib {
 void all();
 } // namespace lib
 
+// https://www.youtube.com/watch?v=i-inxFudrgI
+
 #endif
