@@ -15,7 +15,7 @@ Typical cmake project, make sure LLVM in cmake search path
 5. **if-the-else with PHI** -- `create_is_odd_fn`: `if then else` pattern
 6. **while-do without PHI** -- `create_factorial_loop_fn`: `while-do` without PHI. For factorial, this version and the recursive one optimized down to the same IR code.
 7. **array access with GEP** -- `create_ap_sum_fn`: Sum of an array of arithmetic progression numbers, I really hoped LLVM can do it in the way of `(f + l) * n / 2`, but sadly no, still loops
-8. **Niubi LLVM optimization** -- `create_ap_simple_sum_fn`: Sum of ~an array of~ a sequence of arithmetic progression numbers, still not using that formula, maybe because of some optimization are missing, [unlike pure -O3](https://godbolt.org/z/Pcxs6P3Wz)
+8. **Niubi LLVM optimization** -- `create_ap_simple_sum_fn`: Sum of ~an array of~ a sequence of arithmetic progression numbers, still not using that formula, maybe because of some optimization are missing, [unlike pure -O3](https://godbolt.org/z/Pcxs6P3Wz), maybe it is being done during re-write
 
 ## ORC V2 JIT
 
