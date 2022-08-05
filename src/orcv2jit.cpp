@@ -1,3 +1,4 @@
+#if 0
 // My question to Lang Hames about what does thread-safe mean in ThreadSafeContext and ThreadSafeModule
 //
 // https://groups.google.com/g/llvm-dev/c/QauU4L_bHac
@@ -13,7 +14,6 @@
 #include <llvm-c/Analysis.h>
 #include <llvm-c/BitWriter.h>
 #include <llvm-c/Core.h>
-#include <llvm-c/ExecutionEngine.h>
 #include <llvm-c/LLJIT.h>
 #include <llvm-c/Orc.h>
 #include <llvm-c/Target.h>
@@ -32,13 +32,22 @@
 namespace {
 using native_int_t = std::int64_t;
 
-auto make_builder() {
-  return std::shared_ptr<std::remove_pointer_t<LLVMBuilderRef>>{LLVMCreateBuilder(), LLVMDisposeBuilder};
+auto make_builder(LLVMContextRef ctx) {
+  return std::shared_ptr<std::remove_pointer_t<LLVMBuilderRef>>{LLVMCreateBuilderInContext(ctx), LLVMDisposeBuilder};
 }
 
 auto make_tsc() {
   return std::shared_ptr<std::remove_pointer_t<LLVMOrcThreadSafeContextRef>>{LLVMOrcCreateNewThreadSafeContext(),
                                                                              LLVMOrcDisposeThreadSafeContext};
+}
+
+auto make_mpm() {
+  return std::shared_ptr<std::remove_pointer_t<LLVMPassManagerRef>>{LLVMCreatePassManager(), LLVMDisposePassManager};
+}
+
+auto make_fpm(LLVMModuleRef mod) {
+  return std::shared_ptr<std::remove_pointer_t<LLVMPassManagerRef>>{LLVMCreateFunctionPassManagerForModule(mod),
+                                                                    LLVMDisposePassManager};
 }
 
 bool has_function_defined(LLVMValueRef fn) { return LLVMCountBasicBlocks(fn) == 0; }
@@ -50,34 +59,38 @@ bool has_function_defined(LLVMValueRef fn) { return LLVMCountBasicBlocks(fn) == 
  * }
  */
 LLVMValueRef create_factorial_fn(LLVMModuleRef mod) {
-  LLVMTypeRef llvm_int_ty = LLVMInt64Type();
+  LLVMContextRef ctx = LLVMGetModuleContext(mod);
+
+  LLVMTypeRef llvm_int_ty = LLVMInt64TypeInContext(ctx);
 
   LLVMTypeRef proto_ty = LLVMFunctionType(llvm_int_ty, &llvm_int_ty, 1U, /*isVarArg*/ 0);
   LLVMValueRef fn = LLVMAddFunction(mod, "factorial", proto_ty);
 
-  LLVMBasicBlockRef bb_entry = LLVMAppendBasicBlock(fn, "entry");
-  LLVMBasicBlockRef bb_ret = LLVMAppendBasicBlock(fn, "return");
-  LLVMBasicBlockRef bb_tail = LLVMAppendBasicBlock(fn, "tail");
+  LLVMValueRef Zero = LLVMConstInt(llvm_int_ty, 0ULL, /*SignExtend*/ 0);
+  LLVMValueRef One = LLVMConstInt(llvm_int_ty, 1ULL, /*SignExtend*/ 0);
+
+  LLVMBasicBlockRef bb_entry = LLVMAppendBasicBlockInContext(ctx, fn, "entry");
+  LLVMBasicBlockRef bb_ret = LLVMAppendBasicBlockInContext(ctx, fn, "return");
+  LLVMBasicBlockRef bb_tail = LLVMAppendBasicBlockInContext(ctx, fn, "tail");
 
   {
-    auto const builder = make_builder();
+    auto const builder = make_builder(ctx);
     // if (n == 0)
     LLVMPositionBuilderAtEnd(builder.get(), bb_entry);
     LLVMValueRef n = LLVMGetFirstParam(fn);
     LLVMSetValueName(n, "n");
-    LLVMValueRef cond = LLVMBuildICmp(builder.get(), LLVMIntPredicate::LLVMIntEQ,
-                                      LLVMConstInt(llvm_int_ty, 0ULL, /*SignedExtend*/ 0), n, "cond");
+    LLVMValueRef cond = LLVMBuildICmp(builder.get(), LLVMIntPredicate::LLVMIntEQ, Zero, n, "cond");
     LLVMBuildCondBr(builder.get(), cond, bb_ret, bb_tail);
 
     // then
     // !0 == 1
     LLVMPositionBuilderAtEnd(builder.get(), bb_ret);
-    LLVMBuildRet(builder.get(), LLVMConstInt(llvm_int_ty, 1ULL, /*SignExtend*/ 0));
+    LLVMBuildRet(builder.get(), One);
 
     // else
     // n * factorial(n-1)
     LLVMPositionBuilderAtEnd(builder.get(), bb_tail);
-    LLVMValueRef n1 = LLVMBuildSub(builder.get(), n, LLVMConstInt(llvm_int_ty, 1ULL, /*SignedExtend*/ 0), "n1");
+    LLVMValueRef n1 = LLVMBuildSub(builder.get(), n, One, "n1");
     LLVMValueRef f1 = LLVMBuildCall2(builder.get(), proto_ty, fn, &n1, 1U, "f1");
     LLVMSetTailCall(f1, /*IsTailCall*/ 1); // Doesn't seem to make any difference
     LLVMValueRef ret = LLVMBuildMul(builder.get(), n, f1, "ret");
@@ -102,8 +115,10 @@ struct extern_fn_t {
  * int puts(const char* s);
  */
 extern_fn_t declare_puts_fn(LLVMModuleRef mod) {
-  LLVMTypeRef char_ptr_ty = LLVMPointerType(LLVMInt8Type(), /*AddressSpace*/ 0);
-  LLVMTypeRef proto_ty = LLVMFunctionType(LLVMInt32Type(), &char_ptr_ty, 1U, /*isVarArg*/ 0);
+  LLVMContextRef ctx = LLVMGetModuleContext(mod);
+
+  LLVMTypeRef char_ptr_ty = LLVMPointerType(LLVMInt8TypeInContext(ctx), /*AddressSpace*/ 0);
+  LLVMTypeRef proto_ty = LLVMFunctionType(LLVMInt32TypeInContext(ctx), &char_ptr_ty, 1U, /*isVarArg*/ 0);
   LLVMValueRef puts_fn = LLVMAddFunction(mod, "puts", proto_ty);
 
   assert(has_function_defined(puts_fn)); // NOLINT
@@ -114,13 +129,15 @@ extern_fn_t declare_puts_fn(LLVMModuleRef mod) {
  * int out(const char* s)
  */
 LLVMValueRef create_out_fn(LLVMModuleRef mod) {
+  LLVMContextRef ctx = LLVMGetModuleContext(mod);
+
   auto [puts_proto_ty, puts_fn] = declare_puts_fn(mod);
 
   LLVMValueRef out_fn = LLVMAddFunction(mod, "out", puts_proto_ty);
-  LLVMBasicBlockRef entry = LLVMAppendBasicBlock(out_fn, "entry");
+  LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx, out_fn, "entry");
 
   {
-    auto const builder = make_builder();
+    auto const builder = make_builder(ctx);
     LLVMPositionBuilderAtEnd(builder.get(), entry);
     LLVMValueRef str = LLVMGetFirstParam(out_fn);
     LLVMSetValueName(str, "str");
@@ -138,65 +155,80 @@ auto exec_out_fn(uint64_t addr, char const* s) {
   return func(s);
 }
 
-constexpr auto Fn_Opt_Cnt = 1;
-constexpr auto Module_Opt_Cnt = 1;
-
 struct fn_pass_manager_t {
-  explicit fn_pass_manager_t(LLVMModuleRef mod) : m_fpm{LLVMCreateFunctionPassManagerForModule(mod)} {
-    LLVMAddBasicAliasAnalysisPass(m_fpm);
-    LLVMAddPromoteMemoryToRegisterPass(m_fpm);
-    LLVMAddInstructionCombiningPass(m_fpm);
-    LLVMAddInstructionSimplifyPass(m_fpm);
-    LLVMAddReassociatePass(m_fpm);
-    LLVMAddGVNPass(m_fpm);
-    LLVMAddCFGSimplificationPass(m_fpm);
-    LLVMAddTailCallEliminationPass(m_fpm);
-    LLVMAddLoopDeletionPass(m_fpm);
-    LLVMAddLoopIdiomPass(m_fpm);
-    LLVMInitializeFunctionPassManager(m_fpm);
+  explicit fn_pass_manager_t(LLVMModuleRef mod) : m_mod{mod}, m_fpm{make_fpm(m_mod)} {
+    LLVMAddBasicAliasAnalysisPass(m_fpm.get());
+    LLVMAddPromoteMemoryToRegisterPass(m_fpm.get());
+    LLVMAddInstructionCombiningPass(m_fpm.get());
+    LLVMAddInstructionSimplifyPass(m_fpm.get());
+    LLVMAddReassociatePass(m_fpm.get());
+    LLVMAddNewGVNPass(m_fpm.get());
+    LLVMAddCFGSimplificationPass(m_fpm.get());
+    LLVMAddTailCallEliminationPass(m_fpm.get());
   }
-  fn_pass_manager_t(fn_pass_manager_t const&) = delete;
-  fn_pass_manager_t(fn_pass_manager_t&&) = delete;
-  fn_pass_manager_t& operator=(fn_pass_manager_t const&) = delete;
-  fn_pass_manager_t& operator=(fn_pass_manager_t&&) = delete;
-  ~fn_pass_manager_t() { LLVMDisposePassManager(m_fpm); }
 
   void operator()(LLVMValueRef fn, char const* name) {
     std::cerr << "---------- function `" << name << "` before optimization\n";
     LLVMDumpValue(fn);
-    for (auto i = 0; i < Fn_Opt_Cnt; ++i) {
-      if (LLVMRunFunctionPassManager(m_fpm, fn) == 0) {
-        break;
-      }
-      std::cerr << "---------- function `" << name << "` after iteration " << i << '\n';
+    if (LLVMRunFunctionPassManager(m_fpm.get(), fn) != 0) {
+      std::cerr << "---------- function `" << name << "` after optimization" << '\n';
       LLVMDumpValue(fn);
     }
   }
 
+  void operator()() {
+    for (LLVMValueRef fn = LLVMGetFirstFunction(m_mod); fn != nullptr; fn = LLVMGetNextFunction(fn)) {
+      size_t s = 0U;
+      char const* fn_name = LLVMGetValueName2(fn, &s);
+      (*this)(fn, fn_name);
+    }
+  }
+
 private:
-  LLVMPassManagerRef m_fpm;
+  LLVMModuleRef m_mod;
+  decltype(make_fpm(nullptr)) m_fpm;
 };
 
-void optimize_module(LLVMModuleRef mod) {
-  auto* mpm = LLVMCreatePassManager();
-  LLVMAddFunctionInliningPass(mpm);
-  LLVMAddMergeFunctionsPass(mpm);
-  std::cerr << "---------- module before optimization\n";
-  LLVMDumpModule(mod);
-  for (auto i = 0; i < Module_Opt_Cnt; ++i) {
-    if (LLVMRunPassManager(mpm, mod) == 0) {
-      break;
-    }
-    std::cerr << "---------- after iteration " << i << '\n';
-    LLVMDumpModule(mod);
+struct mod_pass_manager_t {
+  mod_pass_manager_t() {
+    LLVMAddFunctionInliningPass(m_mpm.get());
+    LLVMAddMergeFunctionsPass(m_mpm.get());
   }
-  LLVMDisposePassManager(mpm);
-}
+
+  void operator()(LLVMModuleRef mod) {
+    std::cerr << "---------- module before optimization\n";
+    LLVMDumpModule(mod);
+    if (LLVMRunPassManager(m_mpm.get(), mod) != 0) {
+      std::cerr << "---------- module after optimization " << '\n';
+      LLVMDumpModule(mod);
+    }
+  }
+
+private:
+  decltype(make_mpm()) m_mpm{make_mpm()};
+};
 
 void verify_module(LLVMModuleRef mod) {
   char* error = nullptr;
   LLVMVerifyModule(mod, LLVMAbortProcessAction, &error);
   LLVMDisposeMessage(error);
+}
+
+LLVMErrorRef optimize_module(void* /*payload*/, LLVMModuleRef mod) {
+  verify_module(mod);
+
+  fn_pass_manager_t fpm{mod};
+  fpm();
+
+  mod_pass_manager_t mpm{};
+  mpm(mod);
+
+  return nullptr;
+}
+
+LLVMErrorRef optimize_tsm(void* /*payload*/, LLVMOrcThreadSafeModuleRef* tsm,
+                          LLVMOrcMaterializationResponsibilityRef /*unused*/) {
+  return LLVMOrcThreadSafeModuleWithModuleDo(*tsm, optimize_module, nullptr);
 }
 
 struct orc_v2_jit_t {
@@ -209,6 +241,10 @@ struct orc_v2_jit_t {
       std::cerr << "create jit fail, " << LLVMGetErrorMessage(error) << '\n';
       assert(false); // NOLINT
     }
+#if 1
+    LLVMOrcIRTransformLayerRef ir_trans_layer = LLVMOrcLLJITGetIRTransformLayer(m_jit);
+    LLVMOrcIRTransformLayerSetTransform(ir_trans_layer, optimize_tsm, nullptr); // leak?
+#endif
   }
   orc_v2_jit_t(orc_v2_jit_t const&) = delete;
   orc_v2_jit_t(orc_v2_jit_t&&) = delete;
@@ -217,24 +253,10 @@ struct orc_v2_jit_t {
   ~orc_v2_jit_t() { LLVMOrcDisposeLLJIT(m_jit); }
 
   void add_module(LLVMOrcThreadSafeModuleRef tsm) {
-    LLVMOrcThreadSafeModuleWithModuleDo(
-        tsm,
-        [](void*, LLVMModuleRef mod) -> LLVMErrorRef {
-          verify_module(mod);
-
-          fn_pass_manager_t fpm{mod};
-
-          for (LLVMValueRef fn = LLVMGetFirstFunction(mod); fn != nullptr; fn = LLVMGetNextFunction(fn)) {
-            size_t s = 0U;
-            const char* fn_name = LLVMGetValueName2(fn, &s);
-            fpm(fn, fn_name);
-          }
-          optimize_module(mod);
-          return nullptr;
-        },
-        nullptr);
+    // LLVMConsumeError(optimize_tsm(nullptr, &tsm, nullptr));
     LLVMErrorRef error = LLVMOrcLLJITAddLLVMIRModule(m_jit, LLVMOrcLLJITGetMainJITDylib(m_jit), tsm);
     if (error != nullptr) {
+      LLVMOrcDisposeThreadSafeModule(tsm);
       std::cerr << "add module fail, " << LLVMGetErrorMessage(error) << '\n';
       assert(false); // NOLINT
     }
@@ -261,11 +283,8 @@ void all() {
   LLVMOrcThreadSafeModuleRef tsm =
       LLVMOrcCreateNewThreadSafeModule(LLVMModuleCreateWithName("orc-v2-jit-mod"), tsc.get());
 
-  // fn_pass_manager_t fpm{mod};
-
   // char const* out_name = "out";
   // auto* const out_fn = create_out_fn(mod);
-  // fpm(out_fn, out_name);
 
   char const* fact_name = "factorial";
   LLVMOrcThreadSafeModuleWithModuleDo(
@@ -275,7 +294,6 @@ void all() {
         return nullptr;
       },
       nullptr);
-  // fpm(fact_fn, fact_name);
 
   orc_v2_jit_t jit;
   jit.add_module(tsm);
@@ -288,5 +306,75 @@ void all() {
   auto fact_addr = jit.lookup(fact_name);
   assert(exec_factorial_fn(fact_addr, 4) == 24LL);      // NOLINT
   std::cerr << exec_factorial_fn(fact_addr, 4) << '\n'; // NOLINT
+
+  LLVMShutdown();
 }
 } // namespace orc_v2_lib
+#else
+#include <llvm-c/Core.h>
+#include <llvm-c/Error.h>
+#include <llvm-c/Initialization.h>
+#include <llvm-c/LLJIT.h>
+#include <llvm-c/Support.h>
+#include <llvm-c/Target.h>
+
+#include <iostream>
+
+LLVMOrcThreadSafeModuleRef createDemoModule() {
+  LLVMOrcThreadSafeContextRef TSCtx = LLVMOrcCreateNewThreadSafeContext();
+  LLVMContextRef Ctx = LLVMOrcThreadSafeContextGetContext(TSCtx);
+  LLVMModuleRef M = LLVMModuleCreateWithNameInContext("demo", Ctx);
+  LLVMTypeRef ParamTypes[] = {LLVMInt32Type(), LLVMInt32Type()};
+  LLVMTypeRef SumFunctionType = LLVMFunctionType(LLVMInt32Type(), ParamTypes, 2, 0);
+  LLVMValueRef SumFunction = LLVMAddFunction(M, "sum", SumFunctionType);
+  LLVMBasicBlockRef EntryBB = LLVMAppendBasicBlock(SumFunction, "entry");
+  LLVMBuilderRef Builder = LLVMCreateBuilder();
+  LLVMPositionBuilderAtEnd(Builder, EntryBB);
+  LLVMValueRef SumArg0 = LLVMGetParam(SumFunction, 0);
+  LLVMValueRef SumArg1 = LLVMGetParam(SumFunction, 1);
+  LLVMValueRef Result = LLVMBuildAdd(Builder, SumArg0, SumArg1, "result");
+  LLVMBuildRet(Builder, Result);
+  LLVMDisposeBuilder(Builder);
+  LLVMOrcThreadSafeModuleRef TSM = LLVMOrcCreateNewThreadSafeModule(M, TSCtx);
+  LLVMOrcDisposeThreadSafeContext(TSCtx);
+  return TSM;
+}
+
+LLVMErrorRef transform(void*, LLVMOrcThreadSafeModuleRef*, LLVMOrcMaterializationResponsibilityRef) {
+  return LLVMErrorSuccess;
+}
+
+void cant_fail(LLVMErrorRef Err) {
+  if (Err != LLVMErrorSuccess) {
+    std::cerr << LLVMGetErrorMessage(Err) << '\n';
+    exit(1);
+  }
+}
+
+int foo() {
+  LLVMInitializeCore(LLVMGetGlobalPassRegistry());
+
+  LLVMInitializeNativeTarget();
+  LLVMInitializeNativeAsmPrinter();
+
+  LLVMOrcLLJITRef J{};
+  cant_fail(LLVMOrcCreateLLJIT(&J, 0));
+
+  LLVMOrcIRTransformLayerSetTransform(LLVMOrcLLJITGetIRTransformLayer(J), transform, nullptr);
+
+  cant_fail(LLVMOrcLLJITAddLLVMIRModule(J, LLVMOrcLLJITGetMainJITDylib(J), createDemoModule()));
+
+  LLVMOrcJITTargetAddress SumAddr{};
+  cant_fail(LLVMOrcLLJITLookup(J, &SumAddr, "sum"));
+
+  auto Sum = reinterpret_cast<int32_t (*)(int32_t, int32_t)>(SumAddr);
+  int32_t Result = Sum(1, 2);
+  std::cout << "1 + 2 = " << Result;
+
+  cant_fail(LLVMOrcDisposeLLJIT(J));
+
+  LLVMShutdown();
+
+  return 0;
+}
+#endif
