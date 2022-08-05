@@ -1,6 +1,6 @@
 init_llvm()
 
-add_library(getting-started-llvm-c-api-lib lib.cpp orcv2jit.cpp)
+add_library(getting-started-llvm-c-api-lib orcv2jit.cpp)
 target_link_libraries(getting-started-llvm-c-api-lib PUBLIC project_defaults)
 target_add_llvm(getting-started-llvm-c-api-lib "core;nativecodegen;mcjit;passes;orcjit")
 
