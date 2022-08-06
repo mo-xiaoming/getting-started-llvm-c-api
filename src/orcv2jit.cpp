@@ -303,26 +303,42 @@ struct orc_v2_jit_t {
 private:
   LLVMOrcLLJITRef m_jit{};
 };
+
+struct tsm_t {
+  using fn_t = LLVMValueRef (*)(LLVMModuleRef);
+  void exec(fn_t fn) const {
+    struct w_t {
+      fn_t f;
+    };
+    w_t w{.f = fn};
+    LLVMOrcThreadSafeModuleWithModuleDo(
+        m_tsm,
+        [](void* ctx, LLVMModuleRef mod) -> LLVMErrorRef {
+          reinterpret_cast<w_t*>(ctx)->f(mod); // NOLINT
+          return nullptr;
+        },
+        static_cast<void*>(&w));
+  }
+
+  LLVMOrcThreadSafeModuleRef get() const { return m_tsm; }
+
+private:
+  LLVMOrcThreadSafeModuleRef m_tsm{make_tsm(get_new_mod_name())};
+};
 } // namespace
 
 namespace orc_v2_lib {
 void all() {
-  LLVMOrcThreadSafeModuleRef tsm = make_tsm(get_new_mod_name());
+  tsm_t tsm;
 
   // char const* out_name = "out";
   // auto* const out_fn = create_out_fn(mod);
 
   char const* fact_name = "factorial";
-  LLVMOrcThreadSafeModuleWithModuleDo(
-      tsm,
-      [](void*, LLVMModuleRef mod) -> LLVMErrorRef {
-        create_factorial_fn(mod);
-        return nullptr;
-      },
-      nullptr);
+  tsm.exec(create_factorial_fn);
 
   orc_v2_jit_t jit;
-  jit.add_module(tsm);
+  jit.add_module(tsm.get());
 
   std::cerr << "----------------------------------------------------\n";
 
