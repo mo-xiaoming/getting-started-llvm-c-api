@@ -20,3 +20,6 @@ Typical cmake project, make sure LLVM in cmake search path
 ## ORC V2 JIT
 
 In `orcv2jit.cpp` file
+
+1. Found memory leaks in [llvm official example](https://github.com/llvm/llvm-project/blob/main/llvm/examples/OrcV2Examples/OrcV2CBindingsIRTransforms/OrcV2CBindingsIRTransforms.c), filed a [bug report](https://github.com/llvm/llvm-project/issues/56953), fixed in [4246269](https://github.com/llvm/llvm-project/commit/424626953e89ec555501320ce06513aebf8e6aec)
+2. In the same bug report, I mentioned `LLVMOrcIRTransformLayerSetTransform` causes [memory leaks](https://github.com/llvm/llvm-project/issues/56953), fixed in [bc062e0](https://github.com/llvm/llvm-project/commit/bc062e034fbdb5674fc26d354ef5b4c236aab640)
