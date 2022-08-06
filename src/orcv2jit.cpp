@@ -21,12 +21,15 @@
 #include <llvm-c/Transforms/Utils.h>
 
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <thread>
+#include <vector>
 
 namespace {
 using native_int_t = std::int64_t;
@@ -47,6 +50,30 @@ auto make_mpm() {
 auto make_fpm(LLVMModuleRef mod) {
   return std::shared_ptr<std::remove_pointer_t<LLVMPassManagerRef>>{LLVMCreateFunctionPassManagerForModule(mod),
                                                                     LLVMDisposePassManager};
+}
+
+char const* get_new_mod_name() {
+  static std::vector<std::string> m_names;
+  static std::mutex m_names_mutex;
+  static std::atomic<int> m_i{0};
+
+  auto const i = ++m_i;
+  std::string name = "mod-" + std::to_string(i);
+
+  {
+    const std::lock_guard lg{m_names_mutex};
+    m_names.push_back(name);
+    return m_names.back().c_str();
+  }
+}
+
+LLVMOrcThreadSafeModuleRef make_tsm(char const* name) {
+  auto tsc = make_tsc();
+  LLVMContextRef ctx = LLVMOrcThreadSafeContextGetContext(tsc.get());
+  LLVMModuleRef mod = LLVMModuleCreateWithNameInContext(name, ctx);
+
+  LLVMOrcThreadSafeModuleRef tsm = LLVMOrcCreateNewThreadSafeModule(mod, tsc.get());
+  return tsm;
 }
 
 bool has_function_defined(LLVMValueRef fn) { return LLVMCountBasicBlocks(fn) == 0; }
@@ -280,9 +307,7 @@ private:
 
 namespace orc_v2_lib {
 void all() {
-  auto tsc = make_tsc();
-  LLVMOrcThreadSafeModuleRef tsm =
-      LLVMOrcCreateNewThreadSafeModule(LLVMModuleCreateWithName("orc-v2-jit-mod"), tsc.get());
+  LLVMOrcThreadSafeModuleRef tsm = make_tsm(get_new_mod_name());
 
   // char const* out_name = "out";
   // auto* const out_fn = create_out_fn(mod);
