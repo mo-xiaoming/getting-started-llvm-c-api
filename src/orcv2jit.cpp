@@ -271,6 +271,8 @@ struct orc_v2_jit_t {
     LLVMOrcIRTransformLayerRef ir_trans_layer = LLVMOrcLLJITGetIRTransformLayer(m_jit);
     LLVMOrcIRTransformLayerSetTransform(ir_trans_layer, optimize_tsm, nullptr); // leak?
 #endif
+
+    add_libc();
   }
   orc_v2_jit_t(orc_v2_jit_t const&) = delete;
   orc_v2_jit_t(orc_v2_jit_t&&) = delete;
@@ -301,6 +303,24 @@ struct orc_v2_jit_t {
   }
 
 private:
+  void add_libc() {
+    LLVMJITSymbolFlags flags = {LLVMJITSymbolGenericFlagsWeak, 0};
+    auto addr = reinterpret_cast<LLVMOrcJITTargetAddress>(&puts); // NOLINT
+    LLVMJITEvaluatedSymbol sym = {addr, flags};
+
+    LLVMOrcSymbolStringPoolEntryRef name = LLVMOrcLLJITMangleAndIntern(m_jit, "puts");
+    LLVMJITCSymbolMapPair pair = {name, sym};
+    auto pairs = std::array{pair};
+
+    LLVMOrcMaterializationUnitRef mu = LLVMOrcAbsoluteSymbols(pairs.data(), 1);
+    LLVMErrorRef error = LLVMOrcJITDylibDefine(LLVMOrcLLJITGetMainJITDylib(m_jit), mu);
+    if (error != LLVMErrorSuccess) {
+      LLVMOrcDisposeMaterializationUnit(mu);
+      std::cerr << "create define failed, " << LLVMGetErrorMessage(error) << '\n';
+      assert(false); // NOLINT
+    }
+  }
+
   LLVMOrcLLJITRef m_jit{};
 };
 
@@ -331,8 +351,8 @@ namespace orc_v2_lib {
 void all() {
   tsm_t tsm;
 
-  // char const* out_name = "out";
-  // auto* const out_fn = create_out_fn(mod);
+  char const* out_name = "out";
+  tsm.exec(create_out_fn);
 
   char const* fact_name = "factorial";
   tsm.exec(create_factorial_fn);
@@ -342,8 +362,8 @@ void all() {
 
   std::cerr << "----------------------------------------------------\n";
 
-  // auto out_addr = jit.lookup(out_name);
-  // exec_out_fn(out_addr, "hello, out");
+  auto out_addr = jit.lookup(out_name);
+  exec_out_fn(out_addr, "hello, out");
 
   auto fact_addr = jit.lookup(fact_name);
   assert(exec_factorial_fn(fact_addr, 4) == 24LL);      // NOLINT
