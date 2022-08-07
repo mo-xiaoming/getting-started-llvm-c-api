@@ -31,6 +31,9 @@
 #include <thread>
 #include <vector>
 
+extern "C" void say_hello();
+extern "C" void say_hello() { std::cout << "say hello!" << std::endl; }
+
 namespace {
 using native_int_t = std::int64_t;
 
@@ -58,8 +61,6 @@ struct extern_fn_t {
   LLVMTypeRef proto_ty;
   LLVMValueRef fn;
 };
-
-extern "C" void say_hello() { std::cout << "say hello!" << std::endl; }
 
 /**
  * int say_hello();
@@ -336,8 +337,34 @@ struct orc_v2_jit_t {
     LLVMOrcIRTransformLayerSetTransform(ir_trans_layer, optimize_tsm, nullptr); // leak?
 #endif
 
-    add_libc("puts", reinterpret_cast<uint64_t>(puts));           // NOLINT
-    add_libc("say_hello", reinterpret_cast<uint64_t>(say_hello)); // NOLINT
+#ifndef FOUND_HOST_FUNCTIONS
+    bind("puts", reinterpret_cast<uint64_t>(puts));           // NOLINT
+    bind("say_hello", reinterpret_cast<uint64_t>(say_hello)); // NOLINT
+#else
+    // why say_hello cannot be found?
+    bind("say_hello", reinterpret_cast<uint64_t>(say_hello)); // NOLINT
+    auto const dg_predicate = [](void* payload, LLVMOrcSymbolStringPoolEntryRef sym) {
+      std::cerr << "searching for `" << LLVMOrcSymbolStringPoolEntryStr(sym) << "`";
+      auto* allow_list = static_cast<LLVMOrcSymbolStringPoolEntryRef*>(payload);
+
+      for (auto* p = allow_list; *p != nullptr; ++p) {
+        if (sym == *p) {
+          return 1;
+        }
+      }
+      return 0;
+    };
+    static auto allow_list = std::array<LLVMOrcSymbolStringPoolEntryRef, 3>{
+        LLVMOrcLLJITMangleAndIntern(m_jit, "puts"), LLVMOrcLLJITMangleAndIntern(m_jit, "say_hello"), nullptr};
+    LLVMOrcDefinitionGeneratorRef def_generator{};
+    error = LLVMOrcCreateDynamicLibrarySearchGeneratorForProcess(&def_generator, LLVMOrcLLJITGetGlobalPrefix(m_jit),
+                                                                 dg_predicate, allow_list.data());
+    if (error != LLVMErrorSuccess) {
+      std::cerr << "add search generator fail, " << LLVMGetErrorMessage(error) << '\n';
+      assert(false); // NOLINT
+    }
+    LLVMOrcJITDylibAddGenerator(LLVMOrcLLJITGetMainJITDylib(m_jit), def_generator);
+#endif
   }
   orc_v2_jit_t(orc_v2_jit_t const&) = delete;
   orc_v2_jit_t(orc_v2_jit_t&&) = delete;
@@ -368,7 +395,7 @@ struct orc_v2_jit_t {
   }
 
 private:
-  void add_libc(char const* name, LLVMOrcJITTargetAddress addr) {
+  void bind(char const* name, LLVMOrcJITTargetAddress addr) {
     LLVMJITSymbolFlags flags = {LLVMJITSymbolGenericFlagsWeak, 0};
     LLVMJITEvaluatedSymbol sym = {addr, flags}; // NOLINT
 
