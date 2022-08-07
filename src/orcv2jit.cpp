@@ -52,31 +52,12 @@ auto make_fpm(LLVMModuleRef mod) {
                                                                     LLVMDisposePassManager};
 }
 
-char const* get_new_mod_name() {
-  static std::vector<std::string> m_names;
-  static std::mutex m_names_mutex;
-  static std::atomic<int> m_i{0};
+bool has_function_defined(LLVMValueRef fn) { return LLVMCountBasicBlocks(fn) != 0; }
 
-  auto const i = ++m_i;
-  std::string name = "mod-" + std::to_string(i);
-
-  {
-    const std::lock_guard lg{m_names_mutex};
-    m_names.push_back(name);
-    return m_names.back().c_str();
-  }
-}
-
-LLVMOrcThreadSafeModuleRef make_tsm(char const* name) {
-  auto tsc = make_tsc();
-  LLVMContextRef ctx = LLVMOrcThreadSafeContextGetContext(tsc.get());
-  LLVMModuleRef mod = LLVMModuleCreateWithNameInContext(name, ctx);
-
-  LLVMOrcThreadSafeModuleRef tsm = LLVMOrcCreateNewThreadSafeModule(mod, tsc.get());
-  return tsm;
-}
-
-bool has_function_defined(LLVMValueRef fn) { return LLVMCountBasicBlocks(fn) == 0; }
+struct extern_fn_t {
+  LLVMTypeRef proto_ty;
+  LLVMValueRef fn;
+};
 
 /**
  * int64 factorial(int64 n) {
@@ -84,13 +65,23 @@ bool has_function_defined(LLVMValueRef fn) { return LLVMCountBasicBlocks(fn) == 
  *   return n * factorial(n-1);
  * }
  */
-LLVMValueRef create_factorial_fn(LLVMModuleRef mod) {
+extern_fn_t declare_factorial_fn(LLVMModuleRef mod) {
   LLVMContextRef ctx = LLVMGetModuleContext(mod);
 
   LLVMTypeRef llvm_int_ty = LLVMInt64TypeInContext(ctx);
 
   LLVMTypeRef proto_ty = LLVMFunctionType(llvm_int_ty, &llvm_int_ty, 1U, /*isVarArg*/ 0);
   LLVMValueRef fn = LLVMAddFunction(mod, "factorial", proto_ty);
+
+  return {.proto_ty = proto_ty, .fn = fn};
+}
+
+LLVMValueRef create_factorial_fn(LLVMModuleRef mod) {
+  LLVMContextRef ctx = LLVMGetModuleContext(mod);
+
+  LLVMTypeRef llvm_int_ty = LLVMInt64TypeInContext(ctx);
+
+  auto [proto_ty, fn] = declare_factorial_fn(mod);
 
   LLVMValueRef Zero = LLVMConstInt(llvm_int_ty, 0ULL, /*SignExtend*/ 0);
   LLVMValueRef One = LLVMConstInt(llvm_int_ty, 1ULL, /*SignExtend*/ 0);
@@ -127,16 +118,6 @@ LLVMValueRef create_factorial_fn(LLVMModuleRef mod) {
   return fn;
 }
 
-native_int_t exec_factorial_fn(uint64_t addr, native_int_t n) {       // NOLINT
-  auto func = reinterpret_cast<native_int_t (*)(native_int_t)>(addr); // NOLINT
-  return func(n);
-}
-
-struct extern_fn_t {
-  LLVMTypeRef proto_ty;
-  LLVMValueRef fn;
-};
-
 /**
  * int puts(const char* s);
  */
@@ -147,19 +128,29 @@ extern_fn_t declare_puts_fn(LLVMModuleRef mod) {
   LLVMTypeRef proto_ty = LLVMFunctionType(LLVMInt32TypeInContext(ctx), &char_ptr_ty, 1U, /*isVarArg*/ 0);
   LLVMValueRef puts_fn = LLVMAddFunction(mod, "puts", proto_ty);
 
-  assert(has_function_defined(puts_fn)); // NOLINT
   return {.proto_ty = proto_ty, .fn = puts_fn};
 }
 
 /**
  * int out(const char* s)
  */
+extern_fn_t declare_out_fn(LLVMModuleRef mod) {
+  LLVMContextRef ctx = LLVMGetModuleContext(mod);
+
+  LLVMTypeRef char_ptr_ty = LLVMPointerType(LLVMInt8TypeInContext(ctx), /*AddressSpace*/ 0);
+  LLVMTypeRef proto_ty = LLVMFunctionType(LLVMInt32TypeInContext(ctx), &char_ptr_ty, 1U, /*isVarArg*/ 0);
+  LLVMValueRef fn = LLVMAddFunction(mod, "out", proto_ty);
+
+  return {.proto_ty = proto_ty, .fn = fn};
+}
+
 LLVMValueRef create_out_fn(LLVMModuleRef mod) {
   LLVMContextRef ctx = LLVMGetModuleContext(mod);
 
   auto [puts_proto_ty, puts_fn] = declare_puts_fn(mod);
 
-  LLVMValueRef out_fn = LLVMAddFunction(mod, "out", puts_proto_ty);
+  auto [out_proto_ty, out_fn] = declare_out_fn(mod);
+
   LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx, out_fn, "entry");
 
   {
@@ -176,9 +167,61 @@ LLVMValueRef create_out_fn(LLVMModuleRef mod) {
   return out_fn;
 }
 
-auto exec_out_fn(uint64_t addr, char const* s) {
-  auto func = reinterpret_cast<int (*)(char const*)>(addr); // NOLINT
-  return func(s);
+/**
+ * void cal_fact_4()
+ */
+LLVMValueRef create_cal_fact_4_fn(LLVMModuleRef mod) {
+  LLVMContextRef ctx = LLVMGetModuleContext(mod);
+
+  LLVMTypeRef fact_int_ty = LLVMInt64TypeInContext(ctx);
+
+  LLVMTypeRef proto_ty = LLVMFunctionType(LLVMVoidTypeInContext(ctx), nullptr, 0U, /*isVarArg*/ 0);
+  LLVMValueRef fn = LLVMAddFunction(mod, "cal_fact_4", proto_ty);
+
+  LLVMBasicBlockRef entry = LLVMAppendBasicBlockInContext(ctx, fn, "entry");
+  LLVMBasicBlockRef bb_wrong = LLVMAppendBasicBlockInContext(ctx, fn, "wrong");
+  LLVMBasicBlockRef bb_return = LLVMAppendBasicBlockInContext(ctx, fn, "return");
+
+  {
+    auto const builder = make_builder(ctx);
+    LLVMPositionBuilderAtEnd(builder.get(), entry);
+
+    LLVMValueRef correct_str = LLVMBuildGlobalStringPtr(builder.get(), "!4 == 24", "correct_str");
+    LLVMValueRef wrong_str = LLVMBuildGlobalStringPtr(builder.get(), "shit! !4 != 24", "wrong_str");
+    LLVMTypeRef char_ptr_ty = LLVMPointerType(LLVMInt8TypeInContext(ctx), /*AddressSpace*/ 0);
+    LLVMValueRef str_addr = LLVMBuildAlloca(builder.get(), char_ptr_ty, "str");
+    LLVMBuildStore(builder.get(), correct_str, str_addr);
+
+    // fact_4 = factorial(4)
+    auto [fact_proto_ty, fact_fn] = declare_factorial_fn(mod);
+    LLVMValueRef fact_arg0 = LLVMConstInt(fact_int_ty, 4ULL, /*SignExtend*/ 0);
+    LLVMValueRef fact_4 = LLVMBuildCall2(builder.get(), fact_proto_ty, fact_fn, &fact_arg0, 1U, "fact_4");
+
+    // if (fact_4 == 24)
+    LLVMValueRef cond = LLVMBuildICmp(builder.get(), LLVMIntPredicate::LLVMIntEQ, fact_4,
+                                      LLVMConstInt(fact_int_ty, 24ULL, /*SignExtend*/ 0), "cond");
+    LLVMBuildCondBr(builder.get(), cond, bb_return, bb_wrong);
+
+    // wrong
+    LLVMPositionBuilderAtEnd(builder.get(), bb_wrong);
+    LLVMBuildStore(builder.get(), wrong_str, str_addr);
+    LLVMBuildBr(builder.get(), bb_return);
+
+    // return
+    LLVMPositionBuilderAtEnd(builder.get(), bb_return);
+    auto [out_proto_ty, out_fn] = declare_out_fn(mod);
+    LLVMValueRef str = LLVMBuildLoad2(builder.get(), char_ptr_ty, str_addr, "");
+    LLVMBuildCall2(builder.get(), out_proto_ty, out_fn, &str, 1U, "");
+    LLVMBuildRetVoid(builder.get());
+  }
+
+  LLVMVerifyFunction(fn, LLVMAbortProcessAction);
+  return fn;
+}
+
+auto exec_cal_fact_4_fn(uint64_t addr) {
+  auto func = reinterpret_cast<void (*)()>(addr); // NOLINT
+  return func();
 }
 
 struct fn_pass_manager_t {
@@ -206,7 +249,9 @@ struct fn_pass_manager_t {
     for (LLVMValueRef fn = LLVMGetFirstFunction(m_mod); fn != nullptr; fn = LLVMGetNextFunction(fn)) {
       size_t s = 0U;
       char const* fn_name = LLVMGetValueName2(fn, &s);
-      (*this)(fn, fn_name);
+      if (has_function_defined(fn)) {
+        (*this)(fn, fn_name);
+      }
     }
   }
 
@@ -222,12 +267,15 @@ struct mod_pass_manager_t {
   }
 
   void operator()(LLVMModuleRef mod) {
-    std::cerr << "---------- module before optimization\n";
+    size_t s{};
+    char const* name = LLVMGetModuleIdentifier(mod, &s);
+    std::cerr << "---------- module `" << name << "` before optimization\n";
     LLVMDumpModule(mod);
     if (LLVMRunPassManager(m_mpm.get(), mod) != 0) {
-      std::cerr << "---------- module after optimization " << '\n';
+      std::cerr << "---------- module `" << name << "` after optimization " << '\n';
       LLVMDumpModule(mod);
     }
+    std::cerr << "\n\n";
   }
 
 private:
@@ -326,7 +374,7 @@ private:
 
 struct tsm_t {
   using fn_t = LLVMValueRef (*)(LLVMModuleRef);
-  void exec(fn_t fn) const {
+  void add(fn_t fn) const {
     struct w_t {
       fn_t f;
     };
@@ -343,31 +391,54 @@ struct tsm_t {
   LLVMOrcThreadSafeModuleRef get() const { return m_tsm; }
 
 private:
+  static char const* get_new_mod_name() {
+    static std::vector<std::string> m_names;
+    static std::mutex m_names_mutex;
+    static std::atomic<int> m_i{0};
+
+    auto const i = ++m_i;
+    std::string name = "mod-" + std::to_string(i);
+
+    {
+      const std::lock_guard lg{m_names_mutex};
+      m_names.push_back(name);
+      return m_names.back().c_str();
+    }
+  }
+
+  static LLVMOrcThreadSafeModuleRef make_tsm(char const* name) {
+    auto tsc = make_tsc();
+    LLVMContextRef ctx = LLVMOrcThreadSafeContextGetContext(tsc.get());
+    LLVMModuleRef mod = LLVMModuleCreateWithNameInContext(name, ctx);
+
+    LLVMOrcThreadSafeModuleRef tsm = LLVMOrcCreateNewThreadSafeModule(mod, tsc.get());
+    return tsm;
+  }
+
   LLVMOrcThreadSafeModuleRef m_tsm{make_tsm(get_new_mod_name())};
 };
 } // namespace
 
 namespace orc_v2_lib {
 void all() {
+  tsm_t std_tsm;
+  std_tsm.add(create_out_fn);
+
   tsm_t tsm;
+  tsm.add(create_factorial_fn);
 
-  char const* out_name = "out";
-  tsm.exec(create_out_fn);
-
-  char const* fact_name = "factorial";
-  tsm.exec(create_factorial_fn);
+  tsm_t tsm_cal_fact_4;
+  tsm_cal_fact_4.add(create_cal_fact_4_fn);
 
   orc_v2_jit_t jit;
+  jit.add_module(std_tsm.get());
   jit.add_module(tsm.get());
+  jit.add_module(tsm_cal_fact_4.get());
 
   std::cerr << "----------------------------------------------------\n";
 
-  auto out_addr = jit.lookup(out_name);
-  exec_out_fn(out_addr, "hello, out");
-
-  auto fact_addr = jit.lookup(fact_name);
-  assert(exec_factorial_fn(fact_addr, 4) == 24LL);      // NOLINT
-  std::cerr << exec_factorial_fn(fact_addr, 4) << '\n'; // NOLINT
+  auto cal_fact_4_addr = jit.lookup("cal_fact_4");
+  exec_cal_fact_4_fn(cal_fact_4_addr);
 
   LLVMShutdown();
 }
