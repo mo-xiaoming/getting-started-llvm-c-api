@@ -59,6 +59,20 @@ struct extern_fn_t {
   LLVMValueRef fn;
 };
 
+extern "C" void say_hello() { std::cout << "say hello!" << std::endl; }
+
+/**
+ * int say_hello();
+ */
+extern_fn_t declare_say_hello_fn(LLVMModuleRef mod) {
+  LLVMContextRef ctx = LLVMGetModuleContext(mod);
+
+  LLVMTypeRef proto_ty = LLVMFunctionType(LLVMVoidTypeInContext(ctx), nullptr, 0U, /*isVarArg*/ 0);
+  LLVMValueRef fn = LLVMAddFunction(mod, "say_hello", proto_ty);
+
+  return {.proto_ty = proto_ty, .fn = fn};
+}
+
 /**
  * int64 factorial(int64 n) {
  *   if (n == 0) return 1;
@@ -185,6 +199,8 @@ LLVMValueRef create_cal_fact_4_fn(LLVMModuleRef mod) {
   {
     auto const builder = make_builder(ctx);
     LLVMPositionBuilderAtEnd(builder.get(), entry);
+    auto [say_hello_proto_ty, say_hello_fn] = declare_say_hello_fn(mod);
+    LLVMBuildCall2(builder.get(), say_hello_proto_ty, say_hello_fn, nullptr, 0U, "");
 
     LLVMValueRef correct_str = LLVMBuildGlobalStringPtr(builder.get(), "!4 == 24", "correct_str");
     LLVMValueRef wrong_str = LLVMBuildGlobalStringPtr(builder.get(), "shit! !4 != 24", "wrong_str");
@@ -320,7 +336,8 @@ struct orc_v2_jit_t {
     LLVMOrcIRTransformLayerSetTransform(ir_trans_layer, optimize_tsm, nullptr); // leak?
 #endif
 
-    add_libc();
+    add_libc("puts", reinterpret_cast<uint64_t>(puts));           // NOLINT
+    add_libc("say_hello", reinterpret_cast<uint64_t>(say_hello)); // NOLINT
   }
   orc_v2_jit_t(orc_v2_jit_t const&) = delete;
   orc_v2_jit_t(orc_v2_jit_t&&) = delete;
@@ -351,20 +368,19 @@ struct orc_v2_jit_t {
   }
 
 private:
-  void add_libc() {
+  void add_libc(char const* name, LLVMOrcJITTargetAddress addr) {
     LLVMJITSymbolFlags flags = {LLVMJITSymbolGenericFlagsWeak, 0};
-    auto addr = reinterpret_cast<LLVMOrcJITTargetAddress>(&puts); // NOLINT
-    LLVMJITEvaluatedSymbol sym = {addr, flags};
+    LLVMJITEvaluatedSymbol sym = {addr, flags}; // NOLINT
 
-    LLVMOrcSymbolStringPoolEntryRef name = LLVMOrcLLJITMangleAndIntern(m_jit, "puts");
-    LLVMJITCSymbolMapPair pair = {name, sym};
+    LLVMOrcSymbolStringPoolEntryRef manged_name = LLVMOrcLLJITMangleAndIntern(m_jit, name);
+    LLVMJITCSymbolMapPair pair = {manged_name, sym};
     auto pairs = std::array{pair};
 
     LLVMOrcMaterializationUnitRef mu = LLVMOrcAbsoluteSymbols(pairs.data(), 1);
     LLVMErrorRef error = LLVMOrcJITDylibDefine(LLVMOrcLLJITGetMainJITDylib(m_jit), mu);
     if (error != LLVMErrorSuccess) {
       LLVMOrcDisposeMaterializationUnit(mu);
-      std::cerr << "create define failed, " << LLVMGetErrorMessage(error) << '\n';
+      std::cerr << "create external define `" << name << "` failed, " << LLVMGetErrorMessage(error) << '\n';
       assert(false); // NOLINT
     }
   }
