@@ -8,6 +8,34 @@
 // > My recommendation is to always start with one context per module, and only share contexts if you see memory
 // > consumption from the contexts becoming an issue.
 
+// Notes from [ORCv2.rst](https://github.com/llvm/llvm-project/blob/main/llvm/docs/ORCv2.rst)
+//
+// Eager compilation: By default, symbols get compiled as soon as they are looked up in `ExecutionSession`
+// Lazy  compilation: Only when they first called
+//
+// Custom compilers can be supplied for **each symbol**. Wrapper mechanism (`MaterializationUnit`) is used for custom
+// compilers. Materialization is the blanket term for **any actions** that are required to generate a symbol definition
+// that is safe to call or access.
+//
+// `ExecutionSession`: the JIT'd program and provides JITDylibs, error reporting mechanisms and dispatches the
+// materializers for the JIT
+//
+// `JITDylibs`: the symbol tables `IRCompileLayer`: compilation of IR
+//
+// _Layers_: wrappers around compikers and allow clients to add uncompiled program representations supported by those
+// compilers to JITDylibs
+//
+// `RTDyldObjectLinkingLayer`: linking of relocatable object files
+//
+// LLLazyJIT has `CompileOnDemandLayer` to enable lazy compilation of IR
+//
+// `ResourceTrackers`: to remove code
+//
+// Couldn't find corresponding `setNumCompileThreads` and `setLazyCompileFailureAddr` calls in llvm c api
+//
+// `absoluteSymbols` function is still useful for making **non-global** objects in your JIT visible to JIT'd code
+//
+// `LLVMOrcLazyReexports` define aliases across JITDylib boundaries, `symbolAliases` (missing in c api?) does not
 #include "orcv2jit.hpp"
 
 #include <llvm-c/Analysis.h>
@@ -344,7 +372,6 @@ struct orc_v2_jit_t {
     // why say_hello cannot be found?
     bind("say_hello", reinterpret_cast<uint64_t>(say_hello)); // NOLINT
     auto const dg_predicate = [](void* payload, LLVMOrcSymbolStringPoolEntryRef sym) {
-      std::cerr << "searching for `" << LLVMOrcSymbolStringPoolEntryStr(sym) << "`";
       auto* allow_list = static_cast<LLVMOrcSymbolStringPoolEntryRef*>(payload);
 
       for (auto* p = allow_list; *p != nullptr; ++p) {
@@ -425,7 +452,7 @@ struct tsm_t {
     LLVMOrcThreadSafeModuleWithModuleDo(
         m_tsm,
         [](void* ctx, LLVMModuleRef mod) -> LLVMErrorRef {
-          reinterpret_cast<w_t*>(ctx)->f(mod); // NOLINT
+          static_cast<w_t*>(ctx)->f(mod); // NOLINT
           return nullptr;
         },
         static_cast<void*>(&w));
